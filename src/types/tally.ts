@@ -1,0 +1,57 @@
+export interface TallyRow {
+  id: string;
+  rowNumber: number;
+  date: string;       // e.g. "22/10/2026"
+  hour: string;       // e.g. "08:15"
+  truckNo: string;    // N° CAMION (vide par défaut pour saisie utilisateur)
+  platform: string;   // N° PLATFORM
+  voucher: string;    // N° BON
+  hold1: number | null; // CALE 1
+  hold2: number | null; // CALE 2
+  hold3: number | null; // CALE 3
+  notes?: string;
+}
+
+export interface ReportHeader {
+  title: string;
+  producer: string;        // THE PRODUCER (COSUMAR)
+  unloadingPlace: string;  // UNLOADING PLACE / NAVIRE (MV KAREWOOD)
+  commodity: string;       // COMMODITY (WHITE REFINED SUGAR IN big bag)
+  destination: string;     // DESTINATION (Gaeta, Italy / Kavala, Greece)
+  client: string;          // CLIENT (A/C Chadwell)
+  shiftNo: string;         // N° SHIFT (e.g. "1er Shift (07:00 - 15:00)")
+  inspector: string;       // INSPECTEUR
+  date: string;            // Date du rapport
+  bagWeightKg: number;     // 1200 kg (= 1,200 T par big bag)
+  truckCountManual?: string | number | null; // Nombre de camions manuel
+  holdCapacities: {
+    hold1: number;
+    hold2: number;
+    hold3: number;
+  };
+}
+
+export interface ReportData {
+  id: string;
+  name: string;
+  shiftKey: 'shift1' | 'shift2' | 'shift3';
+  header: ReportHeader;
+  rows: TallyRow[];
+  createdAt: string;
+  updatedAt: string;
+  stoppages?: Array<{
+    timeStart: string;
+    timeEnd: string;
+    reason: string;
+  }>;
+}
+
+export type ShiftKey = 'shift1' | 'shift2' | 'shift3';
+
+export interface ShiftDefinition {
+  key: ShiftKey;
+  label: string;
+  timeRange: string;
+  fullTitle: string;
+  defaultInspector: string;
+}

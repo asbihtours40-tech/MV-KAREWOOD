@@ -1,0 +1,8 @@
+{
+  "name": "Rapport Breakbulk au Chargement",
+  "description": "Application professionnelle de gestion et de pointage de chargement maritime Breakbulk, basée sur la fiche officielle d'inspection portuaire (Cosumar, MV Karewood, cales, camions et cumul des sacs).",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
