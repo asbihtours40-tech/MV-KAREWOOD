@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   FileSpreadsheet,
   Printer,
@@ -12,14 +12,26 @@ import {
   Trash2,
   Calendar,
   Layers,
+  History,
+  Sparkles,
+  UserCheck,
+  User,
 } from 'lucide-react';
 
-import { ReportData, ReportHeader, TallyRow, ShiftKey } from './types/tally';
+import {
+  ReportData,
+  ReportHeader,
+  TallyRow,
+  ShiftKey,
+  ModificationLog,
+  AgentProfile,
+} from './types/tally';
 import {
   initialShiftsState,
   SHIFTS_DEFINITIONS,
+  DEFAULT_AGENTS,
+  INITIAL_MODIFICATION_LOGS,
   create25Rows,
-  TRUCK_NUMBERS_FROM_IMAGE,
 } from './data/initialData';
 import { HeaderInfo } from './components/HeaderInfo';
 import { TallyTable } from './components/TallyTable';
@@ -31,8 +43,12 @@ import { StatisticsBar } from './components/StatisticsBar';
 import { StoppageLog } from './components/StoppageLog';
 import { ClearReportModal } from './components/ClearReportModal';
 import { DailySummaryModal } from './components/DailySummaryModal';
+import { AgentModificationsHistory } from './components/AgentModificationsHistory';
+import { BatchFillModal } from './components/BatchFillModal';
 
-const SHIFTS_STORAGE_KEY = 'breakbulk_tally_3shifts_storage_v4_empty_trucks';
+const SHIFTS_STORAGE_KEY = 'breakbulk_tally_3shifts_storage_v5';
+const LOGS_STORAGE_KEY = 'breakbulk_tally_modifications_logs_v5';
+const AGENT_STORAGE_KEY = 'breakbulk_tally_active_agent_v5';
 
 export default function App() {
   // Store all 3 shifts in state
@@ -51,14 +67,41 @@ export default function App() {
     return initialShiftsState;
   });
 
+  // Active agent profile
+  const [currentAgent, setCurrentAgent] = useState<AgentProfile>(() => {
+    try {
+      const saved = localStorage.getItem(AGENT_STORAGE_KEY);
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch {
+      // ignore
+    }
+    return DEFAULT_AGENTS[0];
+  });
+
+  // Audit trail / modifications logs
+  const [modificationLogs, setModificationLogs] = useState<ModificationLog[]>(() => {
+    try {
+      const saved = localStorage.getItem(LOGS_STORAGE_KEY);
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch {
+      // ignore
+    }
+    return INITIAL_MODIFICATION_LOGS;
+  });
+
   // Active shift selection: shift1 (07:00-15:00), shift2 (15:00-23:00), shift3 (23:00-07:00)
   const [currentShiftKey, setCurrentShiftKey] = useState<ShiftKey>('shift1');
 
-  // Active view tab (Fiche, Plan des cales, Arrêts)
-  const [activeTab, setActiveTab] = useState<'sheet' | 'stowage' | 'stoppages'>('sheet');
+  // Active view tab (Fiche, Plan des cales, Modifications agents, Arrêts)
+  const [activeTab, setActiveTab] = useState<'sheet' | 'stowage' | 'history' | 'stoppages'>('sheet');
 
   // Modals
   const [isQuickEntryOpen, setIsQuickEntryOpen] = useState(false);
+  const [isBatchFillOpen, setIsBatchFillOpen] = useState(false);
   const [isOriginalImageOpen, setIsOriginalImageOpen] = useState(false);
   const [isEditHeaderOpen, setIsEditHeaderOpen] = useState(false);
   const [isClearModalOpen, setIsClearModalOpen] = useState(false);
@@ -70,6 +113,44 @@ export default function App() {
   const activeShiftDef =
     SHIFTS_DEFINITIONS.find((s) => s.key === currentShiftKey) || SHIFTS_DEFINITIONS[0];
 
+  // Helper to add audit trail log
+  const logModification = useCallback(
+    (
+      actionType: 'saisie' | 'modification' | 'suppression' | 'remplissage_global' | 'arret',
+      description: string,
+      rowNumber?: number,
+      details?: string,
+      targetShiftKey?: ShiftKey
+    ) => {
+      const now = new Date();
+      const dd = String(now.getDate()).padStart(2, '0');
+      const mm = String(now.getMonth() + 1).padStart(2, '0');
+      const yyyy = now.getFullYear();
+      const hh = String(now.getHours()).padStart(2, '0');
+      const min = String(now.getMinutes()).padStart(2, '0');
+      const sec = String(now.getSeconds()).padStart(2, '0');
+
+      const shiftK = targetShiftKey || currentShiftKey;
+      const shiftDef = SHIFTS_DEFINITIONS.find((s) => s.key === shiftK) || activeShiftDef;
+
+      const newLog: ModificationLog = {
+        id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        timestamp: `${dd}/${mm}/${yyyy} à ${hh}:${min}:${sec}`,
+        agentName: currentAgent.name,
+        agentRole: currentAgent.role,
+        shiftKey: shiftK,
+        shiftLabel: shiftDef.fullTitle,
+        rowNumber,
+        actionType,
+        description,
+        details,
+      };
+
+      setModificationLogs((prev) => [newLog, ...prev]);
+    },
+    [currentAgent, currentShiftKey, activeShiftDef]
+  );
+
   // Save to localStorage
   useEffect(() => {
     try {
@@ -79,12 +160,71 @@ export default function App() {
     }
   }, [shiftsData]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(LOGS_STORAGE_KEY, JSON.stringify(modificationLogs));
+    } catch {
+      // ignore
+    }
+  }, [modificationLogs]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(AGENT_STORAGE_KEY, JSON.stringify(currentAgent));
+    } catch {
+      // ignore
+    }
+  }, [currentAgent]);
+
   // Update a single row in the active shift
   const handleUpdateRow = (index: number, updated: Partial<TallyRow>) => {
+    const rowNumber = index + 1;
+    const existing = currentReport.rows[index];
+
+    // Log the change
+    const changes: string[] = [];
+    if (updated.truckNo !== undefined && updated.truckNo !== existing?.truckNo) {
+      changes.push(`Matricule : "${updated.truckNo || '(vide)'}"`);
+    }
+    if (updated.hour !== undefined && updated.hour !== existing?.hour) {
+      changes.push(`Heure : ${updated.hour}`);
+    }
+    if (updated.voucher !== undefined && updated.voucher !== existing?.voucher) {
+      changes.push(`Bon : ${updated.voucher}`);
+    }
+    if (updated.platform !== undefined && updated.platform !== existing?.platform) {
+      changes.push(`Plateforme : ${updated.platform}`);
+    }
+    if (updated.hold1 !== undefined && updated.hold1 !== existing?.hold1) {
+      changes.push(`Cale 1 : ${updated.hold1 || 0} sacs`);
+    }
+    if (updated.hold2 !== undefined && updated.hold2 !== existing?.hold2) {
+      changes.push(`Cale 2 : ${updated.hold2 || 0} sacs`);
+    }
+    if (updated.hold3 !== undefined && updated.hold3 !== existing?.hold3) {
+      changes.push(`Cale 3 : ${updated.hold3 || 0} sacs`);
+    }
+
+    if (changes.length > 0) {
+      const now = new Date();
+      const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      logModification(
+        'modification',
+        `Modification ligne N° ${rowNumber} : ${changes.join(', ')}`,
+        rowNumber,
+        `Agent : ${currentAgent.name} (${currentAgent.role}) à ${timeStr}`
+      );
+    }
+
     setShiftsData((prev) => {
       const activeReport = prev[currentShiftKey];
       const newRows = [...activeReport.rows];
-      newRows[index] = { ...newRows[index], ...updated };
+      newRows[index] = {
+        ...newRows[index],
+        ...updated,
+        lastModifiedBy: currentAgent.name,
+        lastModifiedAt: new Date().toLocaleTimeString(),
+      };
 
       return {
         ...prev,
@@ -99,9 +239,11 @@ export default function App() {
 
   // Add row to active shift
   const handleAddRow = () => {
+    const newRowNum = currentReport.rows.length + 1;
+    logModification('saisie', `Ajout de la ligne N° ${newRowNum} sur la fiche`, newRowNum);
+
     setShiftsData((prev) => {
       const activeReport = prev[currentShiftKey];
-      const newRowNum = activeReport.rows.length + 1;
       const newRow: TallyRow = {
         id: `row-${currentShiftKey}-${newRowNum}-${Date.now()}`,
         rowNumber: newRowNum,
@@ -114,6 +256,7 @@ export default function App() {
         hold2: null,
         hold3: null,
         notes: '',
+        lastModifiedBy: currentAgent.name,
       };
 
       return {
@@ -129,6 +272,9 @@ export default function App() {
 
   // Delete row in active shift
   const handleDeleteRow = (index: number) => {
+    const rowNumber = index + 1;
+    logModification('suppression', `Effacement des données de la ligne N° ${rowNumber}`, rowNumber);
+
     setShiftsData((prev) => {
       const activeReport = prev[currentShiftKey];
       const newRows = [...activeReport.rows];
@@ -143,6 +289,7 @@ export default function App() {
         hold2: null,
         hold3: null,
         notes: '',
+        lastModifiedBy: currentAgent.name,
       };
 
       return {
@@ -158,6 +305,10 @@ export default function App() {
 
   // Update header for active shift
   const handleSaveHeader = (newHeader: ReportHeader) => {
+    logModification(
+      'modification',
+      `Mise à jour des paramètres d'en-tête (Inspecteur: ${newHeader.inspector}, Camions: ${newHeader.truckCountManual || 'auto'})`
+    );
     setShiftsData((prev) => ({
       ...prev,
       [currentShiftKey]: {
@@ -170,6 +321,11 @@ export default function App() {
 
   // Vider le rapport des breakbulk (Shift en cours)
   const handleClearCurrentShift = () => {
+    logModification(
+      'suppression',
+      `Vidage complet de la fiche de chargement pour le ${activeShiftDef.label} (${activeShiftDef.timeRange})`
+    );
+
     setShiftsData((prev) => {
       const active = prev[currentShiftKey];
       return {
@@ -187,6 +343,8 @@ export default function App() {
 
   // Vider le rapport des breakbulk (Tous les 3 shifts)
   const handleClearAllShifts = () => {
+    logModification('suppression', 'Vidage global des 3 shifts de chargement de la journée (24h)');
+
     setShiftsData((prev) => {
       const cleared: Record<ShiftKey, ReportData> = {
         shift1: {
@@ -215,6 +373,161 @@ export default function App() {
     });
   };
 
+  // Apply batch fill ("Remplir les informations par tous")
+  const handleApplyBatchFill = (params: {
+    scope: 'current' | 'all';
+    date: string;
+    startHour: string;
+    intervalMinutes: number;
+    trucks: string[];
+    startVoucherNum: number;
+    voucherPrefix: string;
+    platformAlternating: boolean;
+    bagsPerTruck: number;
+    distribution: 'equitable' | 'hold1' | 'hold2' | 'hold3';
+    rowsCount: number;
+  }) => {
+    // Generate rows helper
+    const generateFilledRows = (baseStartHour: string, baseStartVoucher: number) => {
+      const [startH, startM] = baseStartHour.split(':').map((n) => parseInt(n, 10) || 0);
+      let currentMinutes = startH * 60 + startM;
+
+      return Array.from({ length: 25 }, (_, i) => {
+        if (i < params.rowsCount) {
+          const hh = Math.floor((currentMinutes / 60) % 24);
+          const mm = currentMinutes % 60;
+          const hourStr = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+          currentMinutes += params.intervalMinutes;
+
+          const truckNo = params.trucks[i % params.trucks.length] || '';
+          const voucher = `${params.voucherPrefix}${baseStartVoucher + i}`;
+          const platform = params.platformAlternating ? (i % 2 === 0 ? 'P-01' : 'P-02') : 'P-01';
+
+          let h1: number | null = null;
+          let h2: number | null = null;
+          let h3: number | null = null;
+
+          if (params.distribution === 'equitable') {
+            const holdSlot = i % 3;
+            if (holdSlot === 0) h1 = params.bagsPerTruck;
+            else if (holdSlot === 1) h2 = params.bagsPerTruck;
+            else h3 = params.bagsPerTruck;
+          } else if (params.distribution === 'hold1') {
+            h1 = params.bagsPerTruck;
+          } else if (params.distribution === 'hold2') {
+            h2 = params.bagsPerTruck;
+          } else if (params.distribution === 'hold3') {
+            h3 = params.bagsPerTruck;
+          }
+
+          return {
+            id: `row-batch-${i + 1}-${Date.now()}`,
+            rowNumber: i + 1,
+            date: params.date,
+            hour: hourStr,
+            truckNo,
+            platform,
+            voucher,
+            hold1: h1,
+            hold2: h2,
+            hold3: h3,
+            notes: '',
+            lastModifiedBy: currentAgent.name,
+            lastModifiedAt: new Date().toLocaleTimeString(),
+          };
+        } else {
+          return {
+            id: `row-empty-${i + 1}-${Date.now()}`,
+            rowNumber: i + 1,
+            date: params.date,
+            hour: '',
+            truckNo: '',
+            platform: '',
+            voucher: '',
+            hold1: null,
+            hold2: null,
+            hold3: null,
+            notes: '',
+          };
+        }
+      });
+    };
+
+    if (params.scope === 'current') {
+      const newRows = generateFilledRows(params.startHour, params.startVoucherNum);
+      setShiftsData((prev) => {
+        const active = prev[currentShiftKey];
+        return {
+          ...prev,
+          [currentShiftKey]: {
+            ...active,
+            header: {
+              ...active.header,
+              date: params.date,
+              truckCountManual: String(params.rowsCount),
+            },
+            rows: newRows,
+            updatedAt: new Date().toISOString(),
+          },
+        };
+      });
+
+      logModification(
+        'remplissage_global',
+        `Remplissage automatique de ${params.rowsCount} lignes sur le ${activeShiftDef.label}`,
+        undefined,
+        `Navette ${params.trucks.join(', ')} · ${params.bagsPerTruck} sacs/camion · Total ${(
+          params.rowsCount *
+          params.bagsPerTruck *
+          1.2
+        ).toFixed(3)} Tonnes`
+      );
+    } else {
+      // All 3 shifts
+      setShiftsData((prev) => {
+        return {
+          shift1: {
+            ...prev.shift1,
+            header: {
+              ...prev.shift1.header,
+              date: params.date,
+              truckCountManual: String(params.rowsCount),
+            },
+            rows: generateFilledRows('07:15', 4401),
+            updatedAt: new Date().toISOString(),
+          },
+          shift2: {
+            ...prev.shift2,
+            header: {
+              ...prev.shift2.header,
+              date: params.date,
+              truckCountManual: String(params.rowsCount),
+            },
+            rows: generateFilledRows('15:15', 4426),
+            updatedAt: new Date().toISOString(),
+          },
+          shift3: {
+            ...prev.shift3,
+            header: {
+              ...prev.shift3.header,
+              date: params.date,
+              truckCountManual: String(params.rowsCount),
+            },
+            rows: generateFilledRows('23:15', 4451),
+            updatedAt: new Date().toISOString(),
+          },
+        };
+      });
+
+      logModification(
+        'remplissage_global',
+        `Remplissage automatique groupé des 3 shifts (Journée complète 24h)`,
+        undefined,
+        `${params.rowsCount} camions par shift · Navette ${params.trucks.join(', ')}`
+      );
+    }
+  };
+
   // Reset to initial realistic sample data
   const handleResetSample = () => {
     if (
@@ -224,6 +537,7 @@ export default function App() {
     ) {
       setShiftsData(initialShiftsState);
       localStorage.setItem(SHIFTS_STORAGE_KEY, JSON.stringify(initialShiftsState));
+      logModification('remplissage_global', "Réinitialisation vers le modèle d'exemple navire MV KAREWOOD");
     }
   };
 
@@ -237,7 +551,6 @@ export default function App() {
     const { header, rows } = currentReport;
     const lines: string[] = [];
 
-    // Header metadata
     lines.push(`"${header.title}"`);
     lines.push(`"THE PRODUCER","${header.producer}","","N° SHIFT","${header.shiftNo}"`);
     lines.push(
@@ -249,7 +562,6 @@ export default function App() {
     lines.push(`"CLIENT","${header.client}"`);
     lines.push('');
 
-    // Table columns header (3 holds only)
     lines.push(
       '"N°","ARRIVE_DATE","ARRIVE_HOUR","N° CAMION (TRUCK)","N° PLATFORM","N° BON (VOUCHER)","HOLD N° 1","HOLD N° 2","HOLD N° 3","CUMUL SACS TOTAL BAGS"'
     );
@@ -280,7 +592,6 @@ export default function App() {
       );
     });
 
-    // Totals line
     lines.push(
       `"TOTAL DE LA JOURNEE","","","","","","${tH1}","${tH2}","${tH3}","${runningTotal}"`
     );
@@ -327,22 +638,56 @@ export default function App() {
                 </span>
               </div>
               <p className="text-xs text-slate-400 truncate max-w-[280px] sm:max-w-md">
-                Navire : <strong className="text-amber-400">{currentReport.header.unloadingPlace}</strong> · {currentReport.header.commodity}
+                Navire : <strong className="text-amber-400">{currentReport.header.unloadingPlace}</strong> · 1 Big Bag = 1,200 T
               </p>
             </div>
           </div>
 
-          {/* Action buttons */}
+          {/* Action buttons & Agent Switcher */}
           <div className="flex items-center gap-2 sm:gap-2.5">
-            {/* Vider le rapport des breakbulk Button (USER REQUESTED) */}
+            {/* Active Agent Selector */}
+            <div className="hidden lg:flex items-center gap-1.5 bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1 text-xs">
+              <UserCheck className="w-3.5 h-3.5 text-amber-400" />
+              <span className="text-slate-400 font-medium">Agent :</span>
+              <select
+                value={currentAgent.id}
+                onChange={(e) => {
+                  const ag = DEFAULT_AGENTS.find((a) => a.id === e.target.value);
+                  if (ag) {
+                    setCurrentAgent(ag);
+                    logModification('saisie', `Connexion / Prise de poste de ${ag.name} (${ag.role})`);
+                  }
+                }}
+                className="bg-transparent text-white font-bold text-xs focus:outline-none cursor-pointer"
+              >
+                {DEFAULT_AGENTS.map((ag) => (
+                  <option key={ag.id} value={ag.id} className="bg-slate-900 text-white">
+                    {ag.name} · {ag.role}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Remplir toutes les informations Button (USER REQUESTED: "remplir les information par tous") */}
+            <button
+              onClick={() => setIsBatchFillOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white rounded-lg shadow-xs transition-colors cursor-pointer"
+              title="Remplir automatiquement toutes les lignes de la fiche"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Remplir les informations</span>
+              <span className="sm:hidden">Remplir</span>
+            </button>
+
+            {/* Vider le rapport des breakbulk Button */}
             <button
               onClick={() => setIsClearModalOpen(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white rounded-lg shadow-xs transition-colors cursor-pointer"
               title="Vider le rapport des breakbulk"
             >
               <Trash2 className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Vider le rapport des breakbulk</span>
-              <span className="sm:hidden">Vider</span>
+              <span className="hidden xl:inline">Vider le rapport</span>
+              <span className="xl:hidden">Vider</span>
             </button>
 
             {/* Quick Entry Modal Trigger */}
@@ -361,7 +706,7 @@ export default function App() {
               title="Voir les photos originales"
             >
               <Eye className="w-3.5 h-3.5" />
-              <span className="hidden lg:inline">Photos Originales</span>
+              <span className="hidden 2xl:inline">Photos Originales</span>
             </button>
 
             {/* Print / PDF */}
@@ -388,7 +733,7 @@ export default function App() {
             <button
               onClick={handleResetSample}
               className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
-              title="Rétablir les 3 shifts d'exemple"
+              title="Rétablir les données d'exemple"
             >
               <RotateCcw className="w-4 h-4" />
             </button>
@@ -456,7 +801,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* View mode tabs (Fiche vs Cales vs Arrêts) */}
+        {/* View mode tabs (Fiche vs Cales vs Modifications agents vs Arrêts) */}
         <div className="max-w-[1400px] mx-auto px-4 sm:px-6 flex items-center justify-between border-t border-slate-800/80 text-xs py-1">
           <div className="flex gap-1">
             <button
@@ -483,6 +828,22 @@ export default function App() {
               <span>Plan des Cales & Équilibre</span>
             </button>
 
+            {/* Tab: Voir toutes les modifications par les agents */}
+            <button
+              onClick={() => setActiveTab('history')}
+              className={`px-3 py-1 rounded font-semibold transition-colors flex items-center gap-1.5 cursor-pointer ${
+                activeTab === 'history'
+                  ? 'bg-white text-slate-900 shadow-2xs'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-800'
+              }`}
+            >
+              <History className="w-3.5 h-3.5 text-amber-500" />
+              <span>Modifications par les Agents</span>
+              <span className="bg-amber-400 text-slate-950 font-bold px-1.5 py-0.2 rounded-full text-[10px]">
+                {modificationLogs.length}
+              </span>
+            </button>
+
             <button
               onClick={() => setActiveTab('stoppages')}
               className={`px-3 py-1 rounded font-semibold transition-colors flex items-center gap-1.5 cursor-pointer ${
@@ -498,7 +859,7 @@ export default function App() {
 
           <div className="hidden sm:flex items-center gap-3 text-[11px] text-slate-400">
             <span>
-              Inspecteur en poste : <strong className="text-white">{currentReport.header.inspector}</strong>
+              Connecté : <strong className="text-white">{currentAgent.name}</strong> ({currentAgent.role})
             </span>
           </div>
         </div>
@@ -529,8 +890,17 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Action buttons including the requested "Vider le rapport des breakbulk" */}
+              {/* Action buttons */}
               <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setIsBatchFillOpen(true)}
+                  className="px-3.5 py-1.5 text-xs font-bold bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-300 rounded flex items-center gap-1.5 cursor-pointer transition-colors"
+                  title="Remplir automatiquement les informations de la fiche"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Remplir les informations</span>
+                </button>
+
                 <button
                   onClick={() => setIsClearModalOpen(true)}
                   className="px-3.5 py-1.5 text-xs font-bold bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 rounded flex items-center gap-1.5 cursor-pointer transition-colors"
@@ -558,7 +928,7 @@ export default function App() {
                 onEdit={() => setIsEditHeaderOpen(true)}
               />
 
-              {/* Tally Table with 3 holds and exact matricules */}
+              {/* Tally Table with 3 holds and editable truck cells */}
               <TallyTable
                 rows={currentReport.rows}
                 onUpdateRow={handleUpdateRow}
@@ -660,27 +1030,53 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 3: STOPPAGE LOG / REMARKS */}
+        {/* TAB 3: AUDIT TRAIL / MODIFICATIONS DES AGENTS */}
+        {activeTab === 'history' && (
+          <div className="space-y-4">
+            <AgentModificationsHistory
+              logs={modificationLogs}
+              onClearLogs={() => setModificationLogs([])}
+              onSelectShift={(key) => {
+                setCurrentShiftKey(key);
+                setActiveTab('sheet');
+              }}
+            />
+          </div>
+        )}
+
+        {/* TAB 4: STOPPAGE LOG / REMARKS */}
         {activeTab === 'stoppages' && (
           <div className="space-y-4">
             <StoppageLog
               stoppages={currentReport.stoppages || []}
-              onChange={(stoppages) =>
+              onChange={(stoppages) => {
+                logModification(
+                  'arret',
+                  `Mise à jour du registre des arrêts (${stoppages.length} arrêts au total)`
+                );
                 setShiftsData((prev) => ({
                   ...prev,
                   [currentShiftKey]: {
                     ...prev[currentShiftKey],
                     stoppages,
                   },
-                }))
-              }
+                }));
+              }}
             />
           </div>
         )}
       </main>
 
       {/* MODALS */}
-      {/* 1. Clear Report Modal (USER REQUESTED: "Vider le rapport des breakbulk") */}
+      {/* 1. Batch Fill Modal ("Remplir les informations par tous") */}
+      <BatchFillModal
+        isOpen={isBatchFillOpen}
+        onClose={() => setIsBatchFillOpen(false)}
+        activeShift={activeShiftDef}
+        onApplyBatchFill={handleApplyBatchFill}
+      />
+
+      {/* 2. Clear Report Modal */}
       <ClearReportModal
         isOpen={isClearModalOpen}
         onClose={() => setIsClearModalOpen(false)}
@@ -689,7 +1085,7 @@ export default function App() {
         onConfirmClearAllShifts={handleClearAllShifts}
       />
 
-      {/* 2. Daily Summary Modal (Cumul 24h des 3 shifts) */}
+      {/* 3. Daily Summary Modal (Cumul 24h des 3 shifts) */}
       <DailySummaryModal
         isOpen={isDailySummaryOpen}
         onClose={() => setIsDailySummaryOpen(false)}
@@ -697,7 +1093,7 @@ export default function App() {
         onSelectShift={(key) => setCurrentShiftKey(key)}
       />
 
-      {/* 3. Quick Entry Modal with 3 holds and matricule shortcuts */}
+      {/* 4. Quick Entry Modal */}
       <QuickEntryModal
         isOpen={isQuickEntryOpen}
         onClose={() => setIsQuickEntryOpen(false)}
@@ -706,13 +1102,13 @@ export default function App() {
         defaultDate={currentReport.header.date}
       />
 
-      {/* 4. Original Scanned Images Preview Modal */}
+      {/* 5. Original Scanned Images Preview Modal */}
       <OriginalImageModal
         isOpen={isOriginalImageOpen}
         onClose={() => setIsOriginalImageOpen(false)}
       />
 
-      {/* 5. Edit Header Modal */}
+      {/* 6. Edit Header Modal */}
       <EditHeaderModal
         isOpen={isEditHeaderOpen}
         onClose={() => setIsEditHeaderOpen(false)}

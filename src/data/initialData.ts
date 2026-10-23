@@ -172,3 +172,74 @@ export const initialShiftsState: Record<ShiftKey, ReportData> = {
     stoppages: [],
   },
 };
+
+export const DEFAULT_AGENTS = [
+  {
+    id: 'agent-1',
+    name: 'K. EL IDRISSI',
+    role: 'Inspecteur Principal (1er Shift)',
+    code: 'INSP-01',
+  },
+  {
+    id: 'agent-2',
+    name: 'M. BENNANI',
+    role: 'Pointeur Quai (2ème Shift)',
+    code: 'POINT-02',
+  },
+  {
+    id: 'agent-3',
+    name: 'A. TAZI',
+    role: 'Pointeur Nuit (3ème Shift)',
+    code: 'POINT-03',
+  },
+  {
+    id: 'agent-4',
+    name: 'H. CHRAIBI',
+    role: 'Superviseur Logistique COSUMAR',
+    code: 'SUP-CSM',
+  },
+  {
+    id: 'agent-5',
+    name: 'CAPT. O. PETROV',
+    role: 'Second Capitaine MV KAREWOOD',
+    code: 'CH-OFF',
+  },
+];
+
+export const INITIAL_MODIFICATION_LOGS = [
+  {
+    id: 'log-1',
+    timestamp: '22/10/2026 à 07:05',
+    agentName: 'K. EL IDRISSI',
+    agentRole: 'Inspecteur Principal (1er Shift)',
+    shiftKey: 'shift1' as const,
+    shiftLabel: '1er Shift (07:00 - 15:00)',
+    actionType: 'saisie' as const,
+    description: "Ouverture officielle de la fiche de chargement navire MV KAREWOOD",
+    details: "Vérification cales 1, 2, 3 propres et sèches. Marchandise : Sucre blanc raffiné en big bags.",
+  },
+  {
+    id: 'log-2',
+    timestamp: '22/10/2026 à 07:15',
+    agentName: 'K. EL IDRISSI',
+    agentRole: 'Inspecteur Principal (1er Shift)',
+    shiftKey: 'shift1' as const,
+    shiftLabel: '1er Shift (07:00 - 15:00)',
+    rowNumber: 1,
+    actionType: 'saisie' as const,
+    description: "Pointage Camion 61516 A 55 - Bon BON-4401 - Cale 1 : 25 sacs (30.000 T)",
+    details: "Début chargement Cale N° 1 sous Grue Quai 1.",
+  },
+  {
+    id: 'log-3',
+    timestamp: '22/10/2026 à 10:15',
+    agentName: 'H. CHRAIBI',
+    agentRole: 'Superviseur Logistique COSUMAR',
+    shiftKey: 'shift1' as const,
+    shiftLabel: '1er Shift (07:00 - 15:00)',
+    actionType: 'arret' as const,
+    description: "Enregistrement arrêt de chargement : Pause technique & Contrôle élingues de grue (10:15 - 10:35)",
+    details: "Contrôle de sécurité des apparaux de levage.",
+  },
+];
+
