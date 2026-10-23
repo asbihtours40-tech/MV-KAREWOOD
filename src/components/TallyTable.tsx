@@ -227,9 +227,17 @@ export const TallyTable: React.FC<TallyTableProps> = ({
                     : 'bg-white hover:bg-slate-50/50'
                 }`}
               >
-                {/* N° Column */}
+                {/* N° Column with Agent modification badge */}
                 <td className="border-r border-black py-1 text-center font-bold text-[11px] select-none text-slate-900 bg-slate-50/50">
-                  {rowNumber}
+                  <div>{rowNumber}</div>
+                  {row.lastModifiedBy && (
+                    <div
+                      className="no-print text-[8px] font-sans font-extrabold text-blue-900 bg-blue-100 px-0.5 py-0.2 rounded mt-0.5 truncate max-w-[34px] mx-auto border border-blue-200"
+                      title={`Ligne modifiée par : ${row.lastModifiedBy} ${row.lastModifiedAt ? `à ${row.lastModifiedAt}` : ''}`}
+                    >
+                      {row.lastModifiedBy.split(' ').pop()}
+                    </div>
+                  )}
                 </td>
 
                 {/* Date */}

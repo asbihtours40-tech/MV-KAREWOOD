@@ -45,10 +45,11 @@ import { ClearReportModal } from './components/ClearReportModal';
 import { DailySummaryModal } from './components/DailySummaryModal';
 import { AgentModificationsHistory } from './components/AgentModificationsHistory';
 import { BatchFillModal } from './components/BatchFillModal';
+import { LiveModificationsFeed } from './components/LiveModificationsFeed';
 
-const SHIFTS_STORAGE_KEY = 'breakbulk_tally_3shifts_storage_v5';
-const LOGS_STORAGE_KEY = 'breakbulk_tally_modifications_logs_v5';
-const AGENT_STORAGE_KEY = 'breakbulk_tally_active_agent_v5';
+const SHIFTS_STORAGE_KEY = 'breakbulk_tally_3shifts_storage_v6_new_agents';
+const LOGS_STORAGE_KEY = 'breakbulk_tally_modifications_logs_v6_new_agents';
+const AGENT_STORAGE_KEY = 'breakbulk_tally_active_agent_v6_new_agents';
 
 export default function App() {
   // Store all 3 shifts in state
@@ -645,21 +646,55 @@ export default function App() {
 
           {/* Action buttons & Agent Switcher */}
           <div className="flex items-center gap-2 sm:gap-2.5">
-            {/* Active Agent Selector */}
-            <div className="hidden lg:flex items-center gap-1.5 bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1 text-xs">
-              <UserCheck className="w-3.5 h-3.5 text-amber-400" />
-              <span className="text-slate-400 font-medium">Agent :</span>
+            {/* Active Agent Selector with 1-click pills */}
+            <div className="flex items-center gap-1.5 bg-slate-800 border border-slate-700 rounded-lg p-1 text-xs">
+              <UserCheck className="w-3.5 h-3.5 text-amber-400 ml-1 hidden sm:inline" />
+              <span className="text-[11px] font-semibold text-slate-400 pl-1 pr-0.5 hidden md:inline">
+                Agent :
+              </span>
+              {[
+                { id: 'agent-mehdi', name: 'A. EL MEHDI' },
+                { id: 'agent-faical', name: 'A. FAICAL' },
+                { id: 'agent-abderahim', name: 'A. ABDERAHIM' },
+              ].map((ag) => {
+                const isSelected = currentAgent.id === ag.id || currentAgent.name === ag.name;
+                return (
+                  <button
+                    key={ag.id}
+                    type="button"
+                    onClick={() => {
+                      const found = DEFAULT_AGENTS.find((a) => a.id === ag.id);
+                      if (found) {
+                        setCurrentAgent(found);
+                        logModification('saisie', `Prise de poste : ${found.name} (${found.role})`);
+                      }
+                    }}
+                    className={`px-2 py-0.5 rounded text-[11px] font-bold transition-all cursor-pointer ${
+                      isSelected
+                        ? 'bg-amber-400 text-slate-950 shadow-xs'
+                        : 'text-slate-300 hover:text-white hover:bg-slate-700'
+                    }`}
+                  >
+                    {ag.name}
+                  </button>
+                );
+              })}
+              {/* Dropdown for other agents */}
               <select
                 value={currentAgent.id}
                 onChange={(e) => {
                   const ag = DEFAULT_AGENTS.find((a) => a.id === e.target.value);
                   if (ag) {
                     setCurrentAgent(ag);
-                    logModification('saisie', `Connexion / Prise de poste de ${ag.name} (${ag.role})`);
+                    logModification('saisie', `Prise de poste : ${ag.name} (${ag.role})`);
                   }
                 }}
-                className="bg-transparent text-white font-bold text-xs focus:outline-none cursor-pointer"
+                className="bg-slate-900/60 text-slate-300 hover:text-white text-[11px] font-bold focus:outline-none cursor-pointer px-1 py-0.5 rounded"
+                title="Choisir un autre agent"
               >
+                <option value="" disabled className="bg-slate-900 text-slate-400">
+                  Plus d'agents...
+                </option>
                 {DEFAULT_AGENTS.map((ag) => (
                   <option key={ag.id} value={ag.id} className="bg-slate-900 text-white">
                     {ag.name} · {ag.role}
@@ -873,6 +908,15 @@ export default function App() {
             rows={currentReport.rows}
             header={currentReport.header}
             onUpdateHeader={(updated) => handleSaveHeader({ ...currentReport.header, ...updated })}
+          />
+        </div>
+
+        {/* LIVE MODIFICATIONS STREAM (VISIBLE PAR TOUS LES AGENTS) */}
+        <div className="no-print mb-4">
+          <LiveModificationsFeed
+            logs={modificationLogs}
+            onViewAll={() => setActiveTab('history')}
+            activeAgentName={currentAgent.name}
           />
         </div>
 
