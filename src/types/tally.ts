@@ -1,7 +1,7 @@
 export interface TallyRow {
   id: string;
   rowNumber: number;
-  date: string;       // e.g. "22/10/2026"
+  date: string;       // e.g. "26/10/2026"
   hour: string;       // e.g. "08:15"
   truckNo: string;    // N° CAMION (vide par défaut ou rempli)
   platform: string;   // N° PLATFORM
@@ -68,7 +68,7 @@ export interface AgentProfile {
 export interface ModificationLog {
   id: string;
   timestamp: string;      // Date & heure formattée
-  agentName: string;      // Ex: "K. EL IDRISSI"
+  agentName: string;      // Ex: "A. EL MEHDI"
   agentRole: string;      // Ex: "Inspecteur Quai"
   shiftKey: ShiftKey;
   shiftLabel: string;     // Ex: "1er Shift"
@@ -88,4 +88,15 @@ export interface BatchFillConfig {
   bagsPerTruck: number;
   holdDistribution: 'equitable' | 'hold1' | 'hold2' | 'hold3';
   applyToScope: 'current' | 'all';
+}
+
+export interface DayReport24h {
+  id: string;                 // e.g. "day-2026-10-26"
+  date: string;               // e.g. "26/10/2026"
+  dayNumber: number;          // e.g. 1, 2, 3...
+  savedAt: string;            // Timestamp d'enregistrement
+  savedBy: string;            // Nom de l'agent ayant enregistré
+  status: 'en_cours' | 'cloturee';
+  shifts: Record<ShiftKey, ReportData>;
+  notes24h?: string;
 }

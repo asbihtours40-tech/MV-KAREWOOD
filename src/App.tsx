@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   FileSpreadsheet,
   Printer,
@@ -7,7 +7,6 @@ import {
   Truck,
   Ship,
   Eye,
-  Sliders,
   Clock,
   Trash2,
   Calendar,
@@ -15,7 +14,11 @@ import {
   History,
   Sparkles,
   UserCheck,
-  User,
+  Save,
+  CheckCircle2,
+  PlusCircle,
+  FolderArchive,
+  BarChart3,
 } from 'lucide-react';
 
 import {
@@ -25,13 +28,15 @@ import {
   ShiftKey,
   ModificationLog,
   AgentProfile,
+  DayReport24h,
 } from './types/tally';
 import {
-  initialShiftsState,
   SHIFTS_DEFINITIONS,
   DEFAULT_AGENTS,
   INITIAL_MODIFICATION_LOGS,
   create25Rows,
+  INITIAL_24H_DAYS,
+  createFresh24hPeriod,
 } from './data/initialData';
 import { HeaderInfo } from './components/HeaderInfo';
 import { TallyTable } from './components/TallyTable';
@@ -46,26 +51,42 @@ import { DailySummaryModal } from './components/DailySummaryModal';
 import { AgentModificationsHistory } from './components/AgentModificationsHistory';
 import { BatchFillModal } from './components/BatchFillModal';
 import { LiveModificationsFeed } from './components/LiveModificationsFeed';
+import { Consolidated24hView } from './components/Consolidated24hView';
+import { DailyPeriodsManagerModal } from './components/DailyPeriodsManagerModal';
 
-const SHIFTS_STORAGE_KEY = 'breakbulk_tally_3shifts_storage_v6_new_agents';
-const LOGS_STORAGE_KEY = 'breakbulk_tally_modifications_logs_v6_new_agents';
-const AGENT_STORAGE_KEY = 'breakbulk_tally_active_agent_v6_new_agents';
+const DAYS_STORAGE_KEY = 'breakbulk_tally_24h_days_archive_v8';
+const ACTIVE_DAY_ID_KEY = 'breakbulk_tally_active_day_id_v8';
+const LOGS_STORAGE_KEY = 'breakbulk_tally_modifications_logs_v8';
+const AGENT_STORAGE_KEY = 'breakbulk_tally_active_agent_v8';
 
 export default function App() {
-  // Store all 3 shifts in state
-  const [shiftsData, setShiftsData] = useState<Record<ShiftKey, ReportData>>(() => {
+  // Store all 24-hour periods in state
+  const [days, setDays] = useState<DayReport24h[]>(() => {
     try {
-      const saved = localStorage.getItem(SHIFTS_STORAGE_KEY);
+      const saved = localStorage.getItem(DAYS_STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (parsed.shift1 && parsed.shift2 && parsed.shift3) {
+        if (Array.isArray(parsed) && parsed.length > 0) {
           return parsed;
         }
       }
     } catch {
       // ignore
     }
-    return initialShiftsState;
+    return INITIAL_24H_DAYS;
+  });
+
+  // Active 24h day period ID
+  const [activeDayId, setActiveDayId] = useState<string>(() => {
+    try {
+      const savedId = localStorage.getItem(ACTIVE_DAY_ID_KEY);
+      if (savedId) {
+        return savedId;
+      }
+    } catch {
+      // ignore
+    }
+    return days[0]?.id || 'day-2026-10-26-current';
   });
 
   // Active agent profile
@@ -97,8 +118,25 @@ export default function App() {
   // Active shift selection: shift1 (07:00-15:00), shift2 (15:00-23:00), shift3 (23:00-07:00)
   const [currentShiftKey, setCurrentShiftKey] = useState<ShiftKey>('shift1');
 
-  // Active view tab (Fiche, Plan des cales, Modifications agents, Arrêts)
-  const [activeTab, setActiveTab] = useState<'sheet' | 'stowage' | 'history' | 'stoppages'>('sheet');
+  // Active view tab:
+  // 'sheet' = Fiche du Shift
+  // 'consolidated24h' = Bilan Consolidé 24h (3 Shifts)
+  // 'stowage' = Plan des Cales & Équilibre
+  // 'history' = Modifications des Agents
+  // 'stoppages' = Arrêts du Shift
+  const [activeTab, setActiveTab] = useState<
+    'sheet' | 'consolidated24h' | 'stowage' | 'history' | 'stoppages'
+  >('sheet');
+
+  // Notification toast message for saving
+  const [saveToast, setSaveToast] = useState<{
+    visible: boolean;
+    message: string;
+    details?: string;
+  }>({
+    visible: false,
+    message: '',
+  });
 
   // Modals
   const [isQuickEntryOpen, setIsQuickEntryOpen] = useState(false);
@@ -107,10 +145,19 @@ export default function App() {
   const [isEditHeaderOpen, setIsEditHeaderOpen] = useState(false);
   const [isClearModalOpen, setIsClearModalOpen] = useState(false);
   const [isDailySummaryOpen, setIsDailySummaryOpen] = useState(false);
+  const [isPeriodsManagerOpen, setIsPeriodsManagerOpen] = useState(false);
   const [selectedRowIndex, setSelectedRowIndex] = useState<number | null>(null);
 
-  // Active report being viewed/edited
-  const currentReport = shiftsData[currentShiftKey] || initialShiftsState[currentShiftKey];
+  // Active day object
+  const activeDay = useMemo(() => {
+    return days.find((d) => d.id === activeDayId) || days[0] || INITIAL_24H_DAYS[0];
+  }, [days, activeDayId]);
+
+  // Active report being viewed/edited (one shift of the active day)
+  const currentReport = useMemo(() => {
+    return activeDay.shifts[currentShiftKey] || activeDay.shifts.shift1;
+  }, [activeDay, currentShiftKey]);
+
   const activeShiftDef =
     SHIFTS_DEFINITIONS.find((s) => s.key === currentShiftKey) || SHIFTS_DEFINITIONS[0];
 
@@ -155,11 +202,19 @@ export default function App() {
   // Save to localStorage
   useEffect(() => {
     try {
-      localStorage.setItem(SHIFTS_STORAGE_KEY, JSON.stringify(shiftsData));
+      localStorage.setItem(DAYS_STORAGE_KEY, JSON.stringify(days));
     } catch {
       // ignore
     }
-  }, [shiftsData]);
+  }, [days]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTIVE_DAY_ID_KEY, activeDayId);
+    } catch {
+      // ignore
+    }
+  }, [activeDayId]);
 
   useEffect(() => {
     try {
@@ -176,6 +231,67 @@ export default function App() {
       // ignore
     }
   }, [currentAgent]);
+
+  // Auto-dismiss save toast
+  useEffect(() => {
+    if (saveToast.visible) {
+      const timer = setTimeout(() => {
+        setSaveToast({ visible: false, message: '' });
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [saveToast]);
+
+  // Compute 24h grand totals for the active day
+  const activeDayTotals = useMemo(() => {
+    let totalBags = 0;
+    let totalTrucks = 0;
+    let h1 = 0;
+    let h2 = 0;
+    let h3 = 0;
+
+    Object.values(activeDay.shifts).forEach((sh) => {
+      sh.rows.forEach((r) => {
+        const bag1 = Number(r.hold1) || 0;
+        const bag2 = Number(r.hold2) || 0;
+        const bag3 = Number(r.hold3) || 0;
+        const sum = bag1 + bag2 + bag3;
+        if (sum > 0) {
+          totalTrucks++;
+          totalBags += sum;
+          h1 += bag1;
+          h2 += bag2;
+          h3 += bag3;
+        }
+      });
+    });
+
+    return {
+      totalBags,
+      totalTonnage: totalBags * 1.2,
+      totalTrucks,
+      h1,
+      h2,
+      h3,
+    };
+  }, [activeDay]);
+
+  // Helper to mutate active day shifts
+  const updateActiveDayShifts = useCallback(
+    (updater: (prevShifts: Record<ShiftKey, ReportData>) => Record<ShiftKey, ReportData>) => {
+      setDays((prevDays) =>
+        prevDays.map((d) => {
+          if (d.id !== activeDay.id) return d;
+          return {
+            ...d,
+            savedAt: new Date().toISOString(),
+            shifts: updater(d.shifts),
+          };
+        })
+      );
+    },
+    [activeDay.id]
+  );
 
   // Update a single row in the active shift
   const handleUpdateRow = (index: number, updated: Partial<TallyRow>) => {
@@ -208,7 +324,9 @@ export default function App() {
 
     if (changes.length > 0) {
       const now = new Date();
-      const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(
+        now.getMinutes()
+      ).padStart(2, '0')}`;
       logModification(
         'modification',
         `Modification ligne N° ${rowNumber} : ${changes.join(', ')}`,
@@ -217,8 +335,8 @@ export default function App() {
       );
     }
 
-    setShiftsData((prev) => {
-      const activeReport = prev[currentShiftKey];
+    updateActiveDayShifts((prevShifts) => {
+      const activeReport = prevShifts[currentShiftKey];
       const newRows = [...activeReport.rows];
       newRows[index] = {
         ...newRows[index],
@@ -228,7 +346,7 @@ export default function App() {
       };
 
       return {
-        ...prev,
+        ...prevShifts,
         [currentShiftKey]: {
           ...activeReport,
           rows: newRows,
@@ -243,8 +361,8 @@ export default function App() {
     const newRowNum = currentReport.rows.length + 1;
     logModification('saisie', `Ajout de la ligne N° ${newRowNum} sur la fiche`, newRowNum);
 
-    setShiftsData((prev) => {
-      const activeReport = prev[currentShiftKey];
+    updateActiveDayShifts((prevShifts) => {
+      const activeReport = prevShifts[currentShiftKey];
       const newRow: TallyRow = {
         id: `row-${currentShiftKey}-${newRowNum}-${Date.now()}`,
         rowNumber: newRowNum,
@@ -261,7 +379,7 @@ export default function App() {
       };
 
       return {
-        ...prev,
+        ...prevShifts,
         [currentShiftKey]: {
           ...activeReport,
           rows: [...activeReport.rows, newRow],
@@ -276,8 +394,8 @@ export default function App() {
     const rowNumber = index + 1;
     logModification('suppression', `Effacement des données de la ligne N° ${rowNumber}`, rowNumber);
 
-    setShiftsData((prev) => {
-      const activeReport = prev[currentShiftKey];
+    updateActiveDayShifts((prevShifts) => {
+      const activeReport = prevShifts[currentShiftKey];
       const newRows = [...activeReport.rows];
       newRows[index] = {
         ...newRows[index],
@@ -294,7 +412,7 @@ export default function App() {
       };
 
       return {
-        ...prev,
+        ...prevShifts,
         [currentShiftKey]: {
           ...activeReport,
           rows: newRows,
@@ -308,12 +426,14 @@ export default function App() {
   const handleSaveHeader = (newHeader: ReportHeader) => {
     logModification(
       'modification',
-      `Mise à jour des paramètres d'en-tête (Inspecteur: ${newHeader.inspector}, Camions: ${newHeader.truckCountManual || 'auto'})`
+      `Mise à jour des paramètres d'en-tête (Inspecteur: ${newHeader.inspector}, Camions: ${
+        newHeader.truckCountManual || 'auto'
+      })`
     );
-    setShiftsData((prev) => ({
-      ...prev,
+    updateActiveDayShifts((prevShifts) => ({
+      ...prevShifts,
       [currentShiftKey]: {
-        ...prev[currentShiftKey],
+        ...prevShifts[currentShiftKey],
         header: newHeader,
         updatedAt: new Date().toISOString(),
       },
@@ -327,10 +447,10 @@ export default function App() {
       `Vidage complet de la fiche de chargement pour le ${activeShiftDef.label} (${activeShiftDef.timeRange})`
     );
 
-    setShiftsData((prev) => {
-      const active = prev[currentShiftKey];
+    updateActiveDayShifts((prevShifts) => {
+      const active = prevShifts[currentShiftKey];
       return {
-        ...prev,
+        ...prevShifts,
         [currentShiftKey]: {
           ...active,
           header: { ...active.header, truckCountManual: '' },
@@ -342,30 +462,33 @@ export default function App() {
     });
   };
 
-  // Vider le rapport des breakbulk (Tous les 3 shifts)
+  // Vider le rapport des breakbulk (Tous les 3 shifts de la journée active)
   const handleClearAllShifts = () => {
-    logModification('suppression', 'Vidage global des 3 shifts de chargement de la journée (24h)');
+    logModification(
+      'suppression',
+      `Vidage global des 3 shifts de chargement de la journée du ${activeDay.date} (24h)`
+    );
 
-    setShiftsData((prev) => {
+    updateActiveDayShifts((prevShifts) => {
       const cleared: Record<ShiftKey, ReportData> = {
         shift1: {
-          ...prev.shift1,
-          header: { ...prev.shift1.header, truckCountManual: '' },
-          rows: create25Rows(prev.shift1.header.date),
+          ...prevShifts.shift1,
+          header: { ...prevShifts.shift1.header, truckCountManual: '' },
+          rows: create25Rows(prevShifts.shift1.header.date),
           stoppages: [],
           updatedAt: new Date().toISOString(),
         },
         shift2: {
-          ...prev.shift2,
-          header: { ...prev.shift2.header, truckCountManual: '' },
-          rows: create25Rows(prev.shift2.header.date),
+          ...prevShifts.shift2,
+          header: { ...prevShifts.shift2.header, truckCountManual: '' },
+          rows: create25Rows(prevShifts.shift2.header.date),
           stoppages: [],
           updatedAt: new Date().toISOString(),
         },
         shift3: {
-          ...prev.shift3,
-          header: { ...prev.shift3.header, truckCountManual: '' },
-          rows: create25Rows(prev.shift3.header.date),
+          ...prevShifts.shift3,
+          header: { ...prevShifts.shift3.header, truckCountManual: '' },
+          rows: create25Rows(prevShifts.shift3.header.date),
           stoppages: [],
           updatedAt: new Date().toISOString(),
         },
@@ -388,7 +511,6 @@ export default function App() {
     distribution: 'equitable' | 'hold1' | 'hold2' | 'hold3';
     rowsCount: number;
   }) => {
-    // Generate rows helper
     const generateFilledRows = (baseStartHour: string, baseStartVoucher: number) => {
       const [startH, startM] = baseStartHour.split(':').map((n) => parseInt(n, 10) || 0);
       let currentMinutes = startH * 60 + startM;
@@ -456,10 +578,10 @@ export default function App() {
 
     if (params.scope === 'current') {
       const newRows = generateFilledRows(params.startHour, params.startVoucherNum);
-      setShiftsData((prev) => {
-        const active = prev[currentShiftKey];
+      updateActiveDayShifts((prevShifts) => {
+        const active = prevShifts[currentShiftKey];
         return {
-          ...prev,
+          ...prevShifts,
           [currentShiftKey]: {
             ...active,
             header: {
@@ -484,13 +606,13 @@ export default function App() {
         ).toFixed(3)} Tonnes`
       );
     } else {
-      // All 3 shifts
-      setShiftsData((prev) => {
+      // All 3 shifts for the 24h day
+      updateActiveDayShifts((prevShifts) => {
         return {
           shift1: {
-            ...prev.shift1,
+            ...prevShifts.shift1,
             header: {
-              ...prev.shift1.header,
+              ...prevShifts.shift1.header,
               date: params.date,
               truckCountManual: String(params.rowsCount),
             },
@@ -498,9 +620,9 @@ export default function App() {
             updatedAt: new Date().toISOString(),
           },
           shift2: {
-            ...prev.shift2,
+            ...prevShifts.shift2,
             header: {
-              ...prev.shift2.header,
+              ...prevShifts.shift2.header,
               date: params.date,
               truckCountManual: String(params.rowsCount),
             },
@@ -508,9 +630,9 @@ export default function App() {
             updatedAt: new Date().toISOString(),
           },
           shift3: {
-            ...prev.shift3,
+            ...prevShifts.shift3,
             header: {
-              ...prev.shift3.header,
+              ...prevShifts.shift3.header,
               date: params.date,
               truckCountManual: String(params.rowsCount),
             },
@@ -522,32 +644,132 @@ export default function App() {
 
       logModification(
         'remplissage_global',
-        `Remplissage automatique groupé des 3 shifts (Journée complète 24h)`,
+        `Remplissage automatique groupé des 3 shifts (Période 24h complète du ${params.date})`,
         undefined,
         `${params.rowsCount} camions par shift · Navette ${params.trucks.join(', ')}`
       );
     }
   };
 
-  // Reset to initial realistic sample data
-  const handleResetSample = () => {
+  // ENREGISTRER LA PERIODE 24H (1er, 2ème et 3ème shift)
+  const handleSaveCurrentDay = (notes?: string) => {
+    const timestamp = new Date().toISOString();
+    const now = new Date();
+    const timeFormatted = `${String(now.getHours()).padStart(2, '0')}:${String(
+      now.getMinutes()
+    ).padStart(2, '0')}`;
+
+    setDays((prevDays) =>
+      prevDays.map((d) => {
+        if (d.id !== activeDay.id) return d;
+        return {
+          ...d,
+          savedAt: timestamp,
+          savedBy: currentAgent.name,
+          status: 'cloturee',
+          notes24h: notes !== undefined ? notes : d.notes24h,
+        };
+      })
+    );
+
+    const logDesc = `Enregistrement et sauvegarde officielle de la période 24h du ${activeDay.date} (Jour N° ${activeDay.dayNumber})`;
+    const logDetails = `1er, 2ème et 3ème shifts enregistrés avec succès · Total 24h : ${activeDayTotals.totalTrucks} camions, ${activeDayTotals.totalBags.toLocaleString()} sacs (${activeDayTotals.totalTonnage.toFixed(
+      3
+    )} T) · Agent enregistreur : ${currentAgent.name}`;
+
+    logModification('saisie', logDesc, undefined, logDetails);
+
+    setSaveToast({
+      visible: true,
+      message: `Période 24h du ${activeDay.date} enregistrée avec succès !`,
+      details: `Les données des 3 shifts (07:00-15:00, 15:00-23:00, 23:00-07:00) ont été sauvegardées par ${currentAgent.name} à ${timeFormatted}.`,
+    });
+  };
+
+  // Create new 24h period
+  const handleCreateNewDay = (date: string, dayNumber: number) => {
+    const freshDay = createFresh24hPeriod(date, dayNumber, currentAgent.name);
+    setDays((prev) => [freshDay, ...prev]);
+    setActiveDayId(freshDay.id);
+    setCurrentShiftKey('shift1');
+    setActiveTab('sheet');
+
+    logModification(
+      'saisie',
+      `Création et ouverture d'une nouvelle période 24h : Date ${date} (Jour N° ${dayNumber})`,
+      undefined,
+      `Créée par ${currentAgent.name} (${currentAgent.role}). Initialisation des 3 shifts de 8h.`
+    );
+
+    setSaveToast({
+      visible: true,
+      message: `Nouvelle journée 24h du ${date} (Jour N° ${dayNumber}) initialisée.`,
+      details: `Vous pouvez désormais renseigner les fiches du 1er, 2ème et 3ème shift.`,
+    });
+  };
+
+  // Delete a 24h day period
+  const handleDeleteDay = (dayId: string) => {
+    const target = days.find((d) => d.id === dayId);
+    if (!target) return;
+
+    if (days.length <= 1) {
+      alert('Impossible de supprimer la seule période 24h existante.');
+      return;
+    }
+
     if (
       window.confirm(
-        'Rétablir les données de démonstration avec les 3 shifts programmés ?'
+        `Êtes-vous sûr de vouloir supprimer définitivement la période 24h du ${target.date} (Jour N° ${target.dayNumber}) ?`
       )
     ) {
-      setShiftsData(initialShiftsState);
-      localStorage.setItem(SHIFTS_STORAGE_KEY, JSON.stringify(initialShiftsState));
-      logModification('remplissage_global', "Réinitialisation vers le modèle d'exemple navire MV KAREWOOD");
+      setDays((prev) => prev.filter((d) => d.id !== dayId));
+      if (activeDayId === dayId) {
+        const remaining = days.filter((d) => d.id !== dayId);
+        setActiveDayId(remaining[0].id);
+      }
+      logModification(
+        'suppression',
+        `Suppression de l'archive 24h du ${target.date} (Jour N° ${target.dayNumber})`
+      );
     }
   };
 
-  // Print active shift sheet
+  // Switch active 24h day
+  const handleSelectDay = (dayId: string) => {
+    setActiveDayId(dayId);
+    const selected = days.find((d) => d.id === dayId);
+    if (selected) {
+      logModification(
+        'saisie',
+        `Consultation de la période 24h du ${selected.date} (Jour N° ${selected.dayNumber})`
+      );
+    }
+  };
+
+  // Reset to sample
+  const handleResetSample = () => {
+    if (
+      window.confirm(
+        'Rétablir les périodes 24h de démonstration (Jour 1 en cours + Journée précédente archivée) ?'
+      )
+    ) {
+      setDays(INITIAL_24H_DAYS);
+      setActiveDayId(INITIAL_24H_DAYS[0].id);
+      localStorage.setItem(DAYS_STORAGE_KEY, JSON.stringify(INITIAL_24H_DAYS));
+      logModification(
+        'remplissage_global',
+        "Réinitialisation vers le modèle de démonstration 24h navire MV KAREWOOD"
+      );
+    }
+  };
+
+  // Print
   const handlePrint = () => {
     window.print();
   };
 
-  // Export to CSV for active shift
+  // Export CSV for current shift
   const handleExportCSV = () => {
     const { header, rows } = currentReport;
     const lines: string[] = [];
@@ -616,19 +838,80 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
+  // Export CSV for the entire 24h period (3 shifts)
+  const handleExport24hCSV = () => {
+    const lines: string[] = [];
+    lines.push(`"BILAN CONSOLIDE 24 HEURES - CHARGEMENT BREAKBULK"`);
+    lines.push(`"NAVIRE: MV KAREWOOD - PRODUCTEUR: COSUMAR"`);
+    lines.push(`"PERIODE DU: ${activeDay.date} - JOUR N°: ${activeDay.dayNumber}"`);
+    lines.push(`"POIDS REFERENCE: 1 BIG BAG = 1,200 T"`);
+    lines.push('');
+
+    SHIFTS_DEFINITIONS.forEach((def) => {
+      const sh = activeDay.shifts[def.key];
+      lines.push(`"=== ${def.fullTitle} - INSPECTEUR: ${sh?.header.inspector || def.defaultInspector} ==="`);
+      lines.push(
+        '"N°","HEURE","CAMION","PLATEFORME","BON","CALE 1","CALE 2","CALE 3","TOTAL SACS"'
+      );
+      sh?.rows.forEach((r, idx) => {
+        const h1 = Number(r.hold1) || 0;
+        const h2 = Number(r.hold2) || 0;
+        const h3 = Number(r.hold3) || 0;
+        const total = h1 + h2 + h3;
+        if (total > 0 || r.truckNo) {
+          lines.push(
+            `"${idx + 1}","${r.hour || ''}","${r.truckNo || ''}","${r.platform || ''}","${
+              r.voucher || ''
+            }","${h1 || ''}","${h2 || ''}","${h3 || ''}","${total}"`
+          );
+        }
+      });
+      lines.push('');
+    });
+
+    lines.push(`"GRAND TOTAL 24H: ${activeDayTotals.totalBags} SACS - ${activeDayTotals.totalTonnage.toFixed(3)} TONNES"`);
+
+    const blob = new Blob(['\uFEFF' + lines.join('\r\n')], {
+      type: 'text/csv;charset=utf-8;',
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `BILAN_24H_BREAKBULK_${activeDay.date.replace(/\//g, '-')}_JOUR_${activeDay.dayNumber}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="min-h-screen bg-slate-100/90 text-slate-900 pb-16">
+      {/* SAVE CONFIRMATION TOAST BANNER */}
+      {saveToast.visible && (
+        <div className="no-print fixed top-4 right-4 z-50 max-w-md bg-emerald-900 text-white p-4 rounded-xl shadow-2xl border-2 border-emerald-400 flex items-start gap-3 transition-all animate-bounce">
+          <CheckCircle2 className="w-6 h-6 text-emerald-300 shrink-0 mt-0.5" />
+          <div className="flex-1 text-xs">
+            <h4 className="font-extrabold text-sm text-emerald-200">{saveToast.message}</h4>
+            {saveToast.details && <p className="text-emerald-100 mt-1">{saveToast.details}</p>}
+          </div>
+          <button
+            onClick={() => setSaveToast({ visible: false, message: '' })}
+            className="text-emerald-300 hover:text-white cursor-pointer font-bold text-base"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* TOP NAVIGATION & CONTROLS (HIDDEN ON PRINT) */}
       <header className="no-print bg-slate-900 text-white border-b border-slate-800 sticky top-0 z-40 shadow-md">
-        <div className="max-w-[1400px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+        <div className="max-w-[1440px] mx-auto px-3 sm:px-6 h-16 flex items-center justify-between gap-3">
           {/* Logo & Document Title */}
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-amber-400 text-slate-950 flex items-center justify-center font-black shadow-xs shrink-0">
+          <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg bg-amber-400 text-slate-950 flex items-center justify-center font-black shadow-xs shrink-0">
               <Ship className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <span className="font-extrabold text-sm tracking-tight text-white uppercase">
+              <div className="flex items-center gap-1.5 sm:gap-2">
+                <span className="font-extrabold text-xs sm:text-sm tracking-tight text-white uppercase">
                   Pointage Portuaire Breakbulk
                 </span>
                 <span className="hidden sm:inline-block px-1.5 py-0.5 text-[10px] font-bold bg-amber-400 text-slate-950 rounded uppercase">
@@ -638,18 +921,54 @@ export default function App() {
                   3 CALES
                 </span>
               </div>
-              <p className="text-xs text-slate-400 truncate max-w-[280px] sm:max-w-md">
+              <p className="text-[11px] sm:text-xs text-slate-400 truncate max-w-[200px] sm:max-w-md">
                 Navire : <strong className="text-amber-400">{currentReport.header.unloadingPlace}</strong> · 1 Big Bag = 1,200 T
               </p>
             </div>
           </div>
 
-          {/* Action buttons & Agent Switcher */}
-          <div className="flex items-center gap-2 sm:gap-2.5">
+          {/* Action buttons, 24h Saver & Agent Switcher */}
+          <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto py-1">
+            {/* 24H PERIOD SELECTOR & STATUS */}
+            <div className="flex items-center gap-1 bg-slate-800/90 border border-slate-700 rounded-lg p-1 text-xs">
+              <button
+                onClick={() => setIsPeriodsManagerOpen(true)}
+                className="flex items-center gap-1.5 px-2 py-1 rounded font-bold text-amber-300 hover:text-amber-200 hover:bg-slate-700/80 transition-colors cursor-pointer text-[11px]"
+                title="Gérer les périodes de 24h et les archives"
+              >
+                <FolderArchive className="w-3.5 h-3.5 text-amber-400" />
+                <span className="hidden lg:inline">Période 24h :</span>
+                <strong className="text-white font-mono">{activeDay.date}</strong>
+                <span className="bg-slate-900 px-1.5 py-0.2 rounded text-[10px] text-slate-300 font-semibold">
+                  J-{activeDay.dayNumber}
+                </span>
+                {activeDay.status === 'cloturee' ? (
+                  <span className="bg-emerald-950 text-emerald-300 border border-emerald-500/40 px-1 py-0.2 rounded text-[9px] uppercase font-bold">
+                    Enregistrée
+                  </span>
+                ) : (
+                  <span className="bg-amber-950 text-amber-300 border border-amber-500/40 px-1 py-0.2 rounded text-[9px] uppercase font-bold">
+                    En cours
+                  </span>
+                )}
+              </button>
+            </div>
+
+            {/* BUTTON 1: ENREGISTRER LA PERIODE 24H (PRIMARY USER REQUEST) */}
+            <button
+              onClick={() => handleSaveCurrentDay()}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-black bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg shadow-sm ring-2 ring-emerald-400/30 transition-all transform active:scale-95 cursor-pointer shrink-0"
+              title="Enregistrer et sauvegarder les données pour cette période de 24 heures (1re, 2e et 3e shift)"
+            >
+              <Save className="w-4 h-4 text-emerald-200" />
+              <span className="hidden sm:inline">Enregistrer Période 24h</span>
+              <span className="sm:hidden">Enregistrer 24h</span>
+            </button>
+
             {/* Active Agent Selector with 1-click pills */}
-            <div className="flex items-center gap-1.5 bg-slate-800 border border-slate-700 rounded-lg p-1 text-xs">
+            <div className="flex items-center gap-1 bg-slate-800 border border-slate-700 rounded-lg p-1 text-xs">
               <UserCheck className="w-3.5 h-3.5 text-amber-400 ml-1 hidden sm:inline" />
-              <span className="text-[11px] font-semibold text-slate-400 pl-1 pr-0.5 hidden md:inline">
+              <span className="text-[11px] font-semibold text-slate-400 pl-1 pr-0.5 hidden xl:inline">
                 Agent :
               </span>
               {[
@@ -693,7 +1012,7 @@ export default function App() {
                 title="Choisir un autre agent"
               >
                 <option value="" disabled className="bg-slate-900 text-slate-400">
-                  Plus d'agents...
+                  Autres...
                 </option>
                 {DEFAULT_AGENTS.map((ag) => (
                   <option key={ag.id} value={ag.id} className="bg-slate-900 text-white">
@@ -703,89 +1022,57 @@ export default function App() {
               </select>
             </div>
 
-            {/* Remplir toutes les informations Button (USER REQUESTED: "remplir les information par tous") */}
-            <button
-              onClick={() => setIsBatchFillOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white rounded-lg shadow-xs transition-colors cursor-pointer"
-              title="Remplir automatiquement toutes les lignes de la fiche"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Remplir les informations</span>
-              <span className="sm:hidden">Remplir</span>
-            </button>
-
-            {/* Vider le rapport des breakbulk Button */}
-            <button
-              onClick={() => setIsClearModalOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white rounded-lg shadow-xs transition-colors cursor-pointer"
-              title="Vider le rapport des breakbulk"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span className="hidden xl:inline">Vider le rapport</span>
-              <span className="xl:hidden">Vider</span>
-            </button>
-
             {/* Quick Entry Modal Trigger */}
             <button
               onClick={() => setIsQuickEntryOpen(true)}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold bg-amber-400 hover:bg-amber-300 text-slate-950 rounded-lg shadow-sm transition-all transform active:scale-95 cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-amber-400 hover:bg-amber-300 text-slate-950 rounded-lg shadow-sm transition-all transform active:scale-95 cursor-pointer shrink-0"
             >
               <Truck className="w-4 h-4" />
-              <span>Saisie Rapide</span>
+              <span className="hidden sm:inline">Saisie Rapide</span>
             </button>
 
             {/* View Original Scanned Image Button */}
             <button
               onClick={() => setIsOriginalImageOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 rounded-lg transition-colors cursor-pointer"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 rounded-lg transition-colors cursor-pointer shrink-0"
               title="Voir les photos originales"
             >
               <Eye className="w-3.5 h-3.5" />
-              <span className="hidden 2xl:inline">Photos Originales</span>
+              <span className="hidden 2xl:inline">Photo</span>
             </button>
 
             {/* Print / PDF */}
             <button
               onClick={handlePrint}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 rounded-lg transition-colors cursor-pointer"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 rounded-lg transition-colors cursor-pointer shrink-0"
               title="Imprimer ou enregistrer en PDF la fiche officielle"
             >
               <Printer className="w-3.5 h-3.5 text-amber-400" />
               <span className="hidden sm:inline">Imprimer</span>
             </button>
 
-            {/* Export CSV */}
-            <button
-              onClick={handleExportCSV}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 rounded-lg transition-colors cursor-pointer"
-              title="Exporter au format Excel CSV"
-            >
-              <Download className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="hidden lg:inline">CSV</span>
-            </button>
-
             {/* Reset to sample */}
             <button
               onClick={handleResetSample}
-              className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+              className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
               title="Rétablir les données d'exemple"
             >
-              <RotateCcw className="w-4 h-4" />
+              <RotateCcw className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
 
         {/* SHIFT SELECTION BAR (1er shift 07:00-15:00, 2ème shift 15:00-23:00, 3ème shift 23:00-07:00) */}
-        <div className="bg-slate-950/70 border-t border-slate-800 px-4 sm:px-6 py-2">
-          <div className="max-w-[1400px] mx-auto flex flex-wrap items-center justify-between gap-3">
-            {/* The 3 shifts tabs */}
+        <div className="bg-slate-950/70 border-t border-slate-800 px-3 sm:px-6 py-2">
+          <div className="max-w-[1440px] mx-auto flex flex-wrap items-center justify-between gap-2.5">
+            {/* The 3 shifts tabs for the 24h day */}
             <div className="flex items-center gap-1.5 sm:gap-2">
               <span className="text-[11px] font-bold text-slate-400 uppercase tracking-tight mr-1 hidden sm:inline">
-                Poste actif :
+                Shift actif :
               </span>
               {SHIFTS_DEFINITIONS.map((shift) => {
-                const isActive = currentShiftKey === shift.key;
-                const shiftReport = shiftsData[shift.key];
+                const isActive = currentShiftKey === shift.key && activeTab === 'sheet';
+                const shiftReport = activeDay.shifts[shift.key];
                 const shiftBags = (shiftReport?.rows || []).reduce(
                   (s, r) => s + (Number(r.hold1) || 0) + (Number(r.hold2) || 0) + (Number(r.hold3) || 0),
                   0
@@ -794,7 +1081,10 @@ export default function App() {
                 return (
                   <button
                     key={shift.key}
-                    onClick={() => setCurrentShiftKey(shift.key)}
+                    onClick={() => {
+                      setCurrentShiftKey(shift.key);
+                      setActiveTab('sheet');
+                    }}
                     className={`px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
                       isActive
                         ? 'bg-amber-400 text-slate-950 shadow-sm ring-2 ring-amber-300/40'
@@ -825,23 +1115,37 @@ export default function App() {
               })}
             </div>
 
-            {/* Daily Summary Button */}
-            <button
-              onClick={() => setIsDailySummaryOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 cursor-pointer transition-colors"
-            >
-              <Calendar className="w-3.5 h-3.5" />
-              <span>Synthèse Journée (3 Shifts)</span>
-            </button>
+            {/* Quick 24h Summary & Period Archives Shortcut */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setActiveTab('consolidated24h')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-all cursor-pointer ${
+                  activeTab === 'consolidated24h'
+                    ? 'bg-amber-400 text-slate-950 shadow-xs'
+                    : 'bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700'
+                }`}
+              >
+                <BarChart3 className="w-3.5 h-3.5" />
+                <span>Bilan Consolidé 24h ({activeDayTotals.totalBags} sacs · {activeDayTotals.totalTonnage.toFixed(3)} T)</span>
+              </button>
+
+              <button
+                onClick={() => setIsPeriodsManagerOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 cursor-pointer transition-colors"
+              >
+                <Calendar className="w-3.5 h-3.5 text-amber-400" />
+                <span className="hidden sm:inline">Archives 24h ({days.length})</span>
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* View mode tabs (Fiche vs Cales vs Modifications agents vs Arrêts) */}
-        <div className="max-w-[1400px] mx-auto px-4 sm:px-6 flex items-center justify-between border-t border-slate-800/80 text-xs py-1">
-          <div className="flex gap-1">
+        {/* View mode tabs (Fiche vs Bilan 24h vs Cales vs Modifications agents vs Arrêts) */}
+        <div className="max-w-[1440px] mx-auto px-3 sm:px-6 flex items-center justify-between border-t border-slate-800/80 text-xs py-1">
+          <div className="flex gap-1 overflow-x-auto py-0.5">
             <button
               onClick={() => setActiveTab('sheet')}
-              className={`px-3 py-1 rounded font-semibold transition-colors flex items-center gap-1.5 cursor-pointer ${
+              className={`px-3 py-1 rounded font-semibold transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
                 activeTab === 'sheet'
                   ? 'bg-white text-slate-900 shadow-2xs'
                   : 'text-slate-300 hover:text-white hover:bg-slate-800'
@@ -851,22 +1155,35 @@ export default function App() {
               <span>Fiche du Shift ({activeShiftDef.label})</span>
             </button>
 
+            {/* TAB: BILAN CONSOLIDE 24H (3 SHIFTS) */}
+            <button
+              onClick={() => setActiveTab('consolidated24h')}
+              className={`px-3 py-1 rounded font-semibold transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+                activeTab === 'consolidated24h'
+                  ? 'bg-white text-slate-900 shadow-2xs'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-800'
+              }`}
+            >
+              <Layers className="w-3.5 h-3.5 text-amber-500" />
+              <span>Bilan Consolidé 24h (3 Shifts)</span>
+            </button>
+
             <button
               onClick={() => setActiveTab('stowage')}
-              className={`px-3 py-1 rounded font-semibold transition-colors flex items-center gap-1.5 cursor-pointer ${
+              className={`px-3 py-1 rounded font-semibold transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
                 activeTab === 'stowage'
                   ? 'bg-white text-slate-900 shadow-2xs'
                   : 'text-slate-300 hover:text-white hover:bg-slate-800'
               }`}
             >
               <Ship className="w-3.5 h-3.5 text-amber-500" />
-              <span>Plan des Cales & Équilibre</span>
+              <span>Plan des Cales</span>
             </button>
 
             {/* Tab: Voir toutes les modifications par les agents */}
             <button
               onClick={() => setActiveTab('history')}
-              className={`px-3 py-1 rounded font-semibold transition-colors flex items-center gap-1.5 cursor-pointer ${
+              className={`px-3 py-1 rounded font-semibold transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
                 activeTab === 'history'
                   ? 'bg-white text-slate-900 shadow-2xs'
                   : 'text-slate-300 hover:text-white hover:bg-slate-800'
@@ -881,7 +1198,7 @@ export default function App() {
 
             <button
               onClick={() => setActiveTab('stoppages')}
-              className={`px-3 py-1 rounded font-semibold transition-colors flex items-center gap-1.5 cursor-pointer ${
+              className={`px-3 py-1 rounded font-semibold transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
                 activeTab === 'stoppages'
                   ? 'bg-white text-slate-900 shadow-2xs'
                   : 'text-slate-300 hover:text-white hover:bg-slate-800'
@@ -892,7 +1209,7 @@ export default function App() {
             </button>
           </div>
 
-          <div className="hidden sm:flex items-center gap-3 text-[11px] text-slate-400">
+          <div className="hidden md:flex items-center gap-3 text-[11px] text-slate-400 shrink-0">
             <span>
               Connecté : <strong className="text-white">{currentAgent.name}</strong> ({currentAgent.role})
             </span>
@@ -901,7 +1218,7 @@ export default function App() {
       </header>
 
       {/* MAIN CONTENT AREA */}
-      <main className="max-w-[1400px] mx-auto px-4 sm:px-6 pt-5">
+      <main className="max-w-[1440px] mx-auto px-3 sm:px-6 pt-5">
         {/* KPI / Statistics Bar for current shift */}
         <div className="no-print mb-5">
           <StatisticsBar
@@ -930,7 +1247,11 @@ export default function App() {
                   {activeShiftDef.label} : {activeShiftDef.timeRange}
                 </span>
                 <span className="text-slate-600">
-                  Inspecteur : <strong>{currentReport.header.inspector}</strong> · Date : <strong>{currentReport.header.date}</strong>
+                  Inspecteur : <strong>{currentReport.header.inspector}</strong> · Date :{' '}
+                  <strong>{currentReport.header.date}</strong>
+                </span>
+                <span className="bg-slate-100 text-slate-700 font-mono px-2 py-0.5 rounded text-[11px] border border-slate-300">
+                  Jour N° {activeDay.dayNumber}
                 </span>
               </div>
 
@@ -938,7 +1259,7 @@ export default function App() {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setIsBatchFillOpen(true)}
-                  className="px-3.5 py-1.5 text-xs font-bold bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-300 rounded flex items-center gap-1.5 cursor-pointer transition-colors"
+                  className="px-3 py-1.5 text-xs font-bold bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-300 rounded flex items-center gap-1.5 cursor-pointer transition-colors"
                   title="Remplir automatiquement les informations de la fiche"
                 >
                   <Sparkles className="w-3.5 h-3.5 text-blue-600" />
@@ -947,7 +1268,7 @@ export default function App() {
 
                 <button
                   onClick={() => setIsClearModalOpen(true)}
-                  className="px-3.5 py-1.5 text-xs font-bold bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 rounded flex items-center gap-1.5 cursor-pointer transition-colors"
+                  className="px-3 py-1.5 text-xs font-bold bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 rounded flex items-center gap-1.5 cursor-pointer transition-colors"
                   title="Vider le rapport des breakbulk"
                 >
                   <Trash2 className="w-3.5 h-3.5 text-rose-600" />
@@ -955,98 +1276,150 @@ export default function App() {
                 </button>
 
                 <button
+                  onClick={() => handleSaveCurrentDay()}
+                  className="px-3 py-1.5 text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white rounded flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs"
+                  title="Enregistrer la période de 24h avec ses 3 shifts"
+                >
+                  <Save className="w-3.5 h-3.5 text-emerald-200" />
+                  <span>Enregistrer 24h</span>
+                </button>
+
+                <button
                   onClick={() => setIsEditHeaderOpen(true)}
                   className="px-3 py-1.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-800 rounded border border-slate-300 flex items-center gap-1.5 cursor-pointer transition-colors"
                 >
-                  <Sliders className="w-3.5 h-3.5 text-amber-600" />
-                  <span>Modifier l'en-tête</span>
+                  <span>Modifier En-tête</span>
+                </button>
+
+                <button
+                  onClick={handleExportCSV}
+                  className="px-3 py-1.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-800 rounded border border-slate-300 flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Export CSV</span>
                 </button>
               </div>
             </div>
 
-            {/* THE PRINTABLE SHEET CANVAS */}
-            <div className="print-sheet bg-white border border-slate-300 shadow-lg rounded-sm p-4 sm:p-8 max-w-[1180px] mx-auto">
-              {/* Header section identical to the image with active shift */}
+            {/* THE OFFICIAL PRINTABLE TALLY SHEET (MATCHING THE SCANNED SCAN) */}
+            <div className="print-sheet bg-white border border-slate-300 shadow-lg rounded-sm p-5 sm:p-8 max-w-[1180px] mx-auto text-black">
+              {/* Header section identical to physical sheet */}
               <HeaderInfo
                 header={currentReport.header}
                 onEdit={() => setIsEditHeaderOpen(true)}
               />
 
-              {/* Tally Table with 3 holds and editable truck cells */}
-              <TallyTable
-                rows={currentReport.rows}
-                onUpdateRow={handleUpdateRow}
-                onAddRow={handleAddRow}
-                onDeleteRow={handleDeleteRow}
-                selectedRowIndex={selectedRowIndex}
-                onSelectRow={(idx) => setSelectedRowIndex(idx)}
-              />
+              {/* The 25-row Table */}
+              <div className="mt-4">
+                <TallyTable
+                  rows={currentReport.rows}
+                  onUpdateRow={handleUpdateRow}
+                  onAddRow={handleAddRow}
+                  onDeleteRow={handleDeleteRow}
+                  selectedRowIndex={selectedRowIndex}
+                  onSelectRow={(idx: number) => {
+                    setSelectedRowIndex(idx);
+                    setIsQuickEntryOpen(true);
+                  }}
+                />
+              </div>
 
-              {/* Official Signatures & Stamp section at bottom of document */}
-              <div className="mt-8 pt-6 border-t border-slate-300 grid grid-cols-1 sm:grid-cols-3 gap-6 text-xs text-slate-800">
-                <div className="border border-slate-300 rounded p-3 text-center bg-slate-50/50">
-                  <span className="font-bold uppercase tracking-wider block mb-1">
-                    L'INSPECTEUR / TALLY CLERK ({activeShiftDef.label})
-                  </span>
-                  <div className="text-[11px] text-slate-500 font-mono mb-6">
-                    {currentReport.header.inspector}
-                  </div>
-                  <div className="border-t border-dashed border-slate-300 pt-1 text-[10px] text-slate-400">
-                    Date & Visa
+              {/* Official Signatures & Shift Transfer Footer */}
+              <div className="mt-8 pt-6 border-t-2 border-black grid grid-cols-1 md:grid-cols-4 gap-6 text-xs">
+                <div>
+                  <p className="font-bold text-slate-900 uppercase">1er Shift (07:00 - 15:00)</p>
+                  <p className="text-slate-600 font-semibold mt-1">
+                    Inspecteur : <strong className="text-black">A. EL MEHDI</strong>
+                  </p>
+                  <div className="mt-4 h-12 border-b border-dashed border-slate-400 flex items-end justify-center pb-1">
+                    <span className="text-[11px] text-slate-400 italic">Visé au quai</span>
                   </div>
                 </div>
 
-                <div className="border border-slate-300 rounded p-3 text-center bg-slate-50/50">
-                  <span className="font-bold uppercase tracking-wider block mb-1">
-                    SECOND CAPITAINE / CHIEF OFFICER
-                  </span>
-                  <div className="text-[11px] text-slate-500 font-mono mb-6">
-                    {currentReport.header.unloadingPlace} (3 Cales)
-                  </div>
-                  <div className="border-t border-dashed border-slate-300 pt-1 text-[10px] text-slate-400">
-                    Date & Visa Navire
+                <div>
+                  <p className="font-bold text-slate-900 uppercase">2ème Shift (15:00 - 23:00)</p>
+                  <p className="text-slate-600 font-semibold mt-1">
+                    Inspecteur : <strong className="text-black">A. FAICAL</strong>
+                  </p>
+                  <div className="mt-4 h-12 border-b border-dashed border-slate-400 flex items-end justify-center pb-1">
+                    <span className="text-[11px] text-slate-400 italic">Visé au quai</span>
                   </div>
                 </div>
 
-                <div className="border border-slate-300 rounded p-3 text-center bg-slate-50/50">
-                  <span className="font-bold uppercase tracking-wider block mb-1">
-                    STEVE DORE / RESPONSABLE QUAI
-                  </span>
-                  <div className="text-[11px] text-slate-500 font-mono mb-6">
-                    COSUMAR / AC CHADWELL
-                  </div>
-                  <div className="border-t border-dashed border-slate-300 pt-1 text-[10px] text-slate-400">
-                    Cachet & Visa Quai
+                <div>
+                  <p className="font-bold text-slate-900 uppercase">3ème Shift (23:00 - 07:00)</p>
+                  <p className="text-slate-600 font-semibold mt-1">
+                    Inspecteur : <strong className="text-black">A. ABDERAHIM</strong>
+                  </p>
+                  <div className="mt-4 h-12 border-b border-dashed border-slate-400 flex items-end justify-center pb-1">
+                    <span className="text-[11px] text-slate-400 italic">Visé au quai</span>
                   </div>
                 </div>
+
+                <div>
+                  <p className="font-bold text-slate-900 uppercase">Visa Capitainerie / Bord</p>
+                  <p className="text-slate-600 font-semibold mt-1">
+                    Navire : <strong className="text-black">MV KAREWOOD</strong>
+                  </p>
+                  <div className="mt-4 h-12 border-b border-dashed border-slate-400 flex items-end justify-center pb-1">
+                    <span className="text-[11px] text-slate-400 italic">Signature & Cachet</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Timestamp & Legal Disclaimer */}
+              <div className="mt-4 text-[10px] text-slate-500 flex justify-between items-center print:text-black">
+                <span>Document officiel de pointage Breakbulk · COSUMAR S.A.</span>
+                <span>
+                  Généré le {new Date().toLocaleDateString('fr-FR')} à{' '}
+                  {new Date().toLocaleTimeString('fr-FR')}
+                </span>
               </div>
             </div>
           </div>
         )}
 
-        {/* TAB 2: SHIP HOLD STOWAGE PLAN (3 HOLDS) */}
+        {/* TAB 2: BILAN CONSOLIDE 24 HEURES (3 SHIFTS) */}
+        {activeTab === 'consolidated24h' && (
+          <Consolidated24hView
+            day={activeDay}
+            onPrint={handlePrint}
+            onExportCSV={handleExport24hCSV}
+          />
+        )}
+
+        {/* TAB 3: STOWAGE PLAN & 3 HOLDS BALANCE */}
         {activeTab === 'stowage' && (
-          <div className="space-y-4">
-            <HoldVisualizer header={currentReport.header} rows={currentReport.rows} />
-            <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-2xs">
-              <h4 className="text-sm font-bold text-slate-900 uppercase tracking-tight mb-3">
-                Répartition des 3 cales · {activeShiftDef.label} ({activeShiftDef.timeRange})
-              </h4>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+          <div className="space-y-6">
+            <HoldVisualizer
+              header={currentReport.header}
+              rows={currentReport.rows}
+            />
+
+            {/* Hold Details summary table */}
+            <div className="bg-white p-5 rounded-lg border border-slate-200 shadow-xs">
+              <h3 className="font-bold text-sm text-slate-900 uppercase mb-3 flex items-center gap-2">
+                <Ship className="w-4 h-4 text-amber-500" />
+                <span>Répartition du Sucre en Sacs par Cale (1 Big Bag = 1,200 T)</span>
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {[1, 2, 3].map((h) => {
-                  const holdKey = `hold${h}` as 'hold1' | 'hold2' | 'hold3';
                   const bags = currentReport.rows.reduce(
-                    (acc, r) => acc + (Number(r[holdKey]) || 0),
+                    (sum, r) =>
+                      sum + (Number(h === 1 ? r.hold1 : h === 2 ? r.hold2 : r.hold3) || 0),
                     0
                   );
                   const mt = bags * 1.2;
                   const trucksForHold = currentReport.rows.filter(
-                    (r) => (Number(r[holdKey]) || 0) > 0
+                    (r) => (Number(h === 1 ? r.hold1 : h === 2 ? r.hold2 : r.hold3) || 0) > 0
                   ).length;
 
                   return (
-                    <div key={h} className="border border-slate-200 rounded p-4 bg-slate-50">
-                      <div className="font-black text-slate-900 mb-2 border-b border-slate-200 pb-1.5 flex justify-between items-center">
+                    <div
+                      key={h}
+                      className="p-4 rounded-lg bg-slate-50 border border-slate-200 text-xs"
+                    >
+                      <div className="flex justify-between items-center font-bold border-b border-slate-200 pb-2 mb-2">
                         <span className="text-sm text-slate-900">CALE N° {h}</span>
                         <span className="text-[11px] font-mono text-slate-500">
                           {h === 1 ? 'Proue (Avant)' : h === 2 ? 'Centre' : 'Poupe (Arrière)'}
@@ -1055,11 +1428,15 @@ export default function App() {
                       <div className="space-y-2 text-slate-700">
                         <div className="flex justify-between items-center">
                           <span>Sacs chargés :</span>
-                          <strong className="font-mono text-base text-slate-950">{bags.toLocaleString()}</strong>
+                          <strong className="font-mono text-base text-slate-950">
+                            {bags.toLocaleString()}
+                          </strong>
                         </div>
                         <div className="flex justify-between items-center">
                           <span>Tonnage réel :</span>
-                          <strong className="font-mono text-base text-emerald-800">{mt.toFixed(3)} T</strong>
+                          <strong className="font-mono text-base text-emerald-800">
+                            {mt.toFixed(3)} T
+                          </strong>
                         </div>
                         <div className="flex justify-between items-center">
                           <span>Rotations camion :</span>
@@ -1074,7 +1451,7 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 3: AUDIT TRAIL / MODIFICATIONS DES AGENTS */}
+        {/* TAB 4: AUDIT TRAIL / MODIFICATIONS DES AGENTS */}
         {activeTab === 'history' && (
           <div className="space-y-4">
             <AgentModificationsHistory
@@ -1088,7 +1465,7 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 4: STOPPAGE LOG / REMARKS */}
+        {/* TAB 5: STOPPAGE LOG / REMARKS */}
         {activeTab === 'stoppages' && (
           <div className="space-y-4">
             <StoppageLog
@@ -1098,10 +1475,10 @@ export default function App() {
                   'arret',
                   `Mise à jour du registre des arrêts (${stoppages.length} arrêts au total)`
                 );
-                setShiftsData((prev) => ({
-                  ...prev,
+                updateActiveDayShifts((prevShifts) => ({
+                  ...prevShifts,
                   [currentShiftKey]: {
-                    ...prev[currentShiftKey],
+                    ...prevShifts[currentShiftKey],
                     stoppages,
                   },
                 }));
@@ -1112,7 +1489,20 @@ export default function App() {
       </main>
 
       {/* MODALS */}
-      {/* 1. Batch Fill Modal ("Remplir les informations par tous") */}
+      {/* 1. 24h Daily Periods Archive Manager Modal */}
+      <DailyPeriodsManagerModal
+        isOpen={isPeriodsManagerOpen}
+        onClose={() => setIsPeriodsManagerOpen(false)}
+        days={days}
+        activeDayId={activeDay.id}
+        onSelectDay={handleSelectDay}
+        onCreateNewDay={handleCreateNewDay}
+        onSaveCurrentDay={handleSaveCurrentDay}
+        onDeleteDay={handleDeleteDay}
+        activeAgentName={currentAgent.name}
+      />
+
+      {/* 2. Batch Fill Modal ("Remplir les informations par tous") */}
       <BatchFillModal
         isOpen={isBatchFillOpen}
         onClose={() => setIsBatchFillOpen(false)}
@@ -1120,7 +1510,7 @@ export default function App() {
         onApplyBatchFill={handleApplyBatchFill}
       />
 
-      {/* 2. Clear Report Modal */}
+      {/* 3. Clear Report Modal */}
       <ClearReportModal
         isOpen={isClearModalOpen}
         onClose={() => setIsClearModalOpen(false)}
@@ -1129,15 +1519,18 @@ export default function App() {
         onConfirmClearAllShifts={handleClearAllShifts}
       />
 
-      {/* 3. Daily Summary Modal (Cumul 24h des 3 shifts) */}
+      {/* 4. Daily Summary Modal (Cumul 24h des 3 shifts) */}
       <DailySummaryModal
         isOpen={isDailySummaryOpen}
         onClose={() => setIsDailySummaryOpen(false)}
-        shiftsData={shiftsData}
-        onSelectShift={(key) => setCurrentShiftKey(key)}
+        shiftsData={activeDay.shifts}
+        onSelectShift={(key) => {
+          setCurrentShiftKey(key);
+          setActiveTab('sheet');
+        }}
       />
 
-      {/* 4. Quick Entry Modal */}
+      {/* 5. Quick Entry Modal */}
       <QuickEntryModal
         isOpen={isQuickEntryOpen}
         onClose={() => setIsQuickEntryOpen(false)}
@@ -1146,13 +1539,13 @@ export default function App() {
         defaultDate={currentReport.header.date}
       />
 
-      {/* 5. Original Scanned Images Preview Modal */}
+      {/* 6. Original Scanned Images Preview Modal */}
       <OriginalImageModal
         isOpen={isOriginalImageOpen}
         onClose={() => setIsOriginalImageOpen(false)}
       />
 
-      {/* 6. Edit Header Modal */}
+      {/* 7. Edit Header Modal */}
       <EditHeaderModal
         isOpen={isEditHeaderOpen}
         onClose={() => setIsEditHeaderOpen(false)}
